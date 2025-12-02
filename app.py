@@ -280,584 +280,254 @@ class SlopeTradingAnalyzer:
         return (excess_returns * np.sqrt(252)) / (np.std(returns) / 100) if np.std(returns) != 0 else 0
     
     def create_price_chart(self, merged_data, signals_df, branch_name, slope_window, pos_threshold, neg_threshold):
-        """Create enhanced 4-panel chart with slope analysis"""
-        
+        """Create a clean single-panel price chart with:
+        - Price line
+        - Colored slope segments (green/gray)
+        - Entry markers
+        - Exit markers with % return
+        - RSI activation markers
+        - Flag activation markers
+        No MAs, no Volume, no Position/Flag charts.
+        """
+
         colors = {
             "price_base": "#e5e7eb",
-            "ma_20": "#f59e0b",
-            "ma_50": "#8b5cf6", 
-            "volume": "#94a3b8",
-            "slope": "#3b82f6",
-            "slope_entry": "#16a34a",
-            "slope_exit": "#6b7280",  # Changed from red to gray
             "slope_segment_green": "#10b981",
-            "slope_segment_gray": "#6b7280",  # Changed from red to gray
+            "slope_segment_gray": "#6b7280",
             "rsi_entry": "#3b82f6",
             "rsi_exit_green": "#16a34a",
-            "rsi_exit_gray": "#6b7280",  # Changed from red to gray
-            "rsi_activation": "#8b5cf6",  # Purple for RSI activation
-            "position": "#059669",
+            "rsi_exit_gray": "#6b7280",
+            "rsi_activation": "#8b5cf6",
+            "flag_activation": "#8b5cf6",
         }
 
-        df_view = merged_data.copy().set_index("Date")
-        
-        # Ensure Volume column exists
-        if "Volume" not in df_view.columns:
-            df_view["Volume"] = np.nan
-            
-        # InTrade column is now created in the apply_slope_filter method
-
-        fig = make_subplots(
-            rows=5,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.05,
-            row_heights=[0.4, 0.18, 0.18, 0.12, 0.12],
-            specs=[
-                [{}],  # Price
-                [{}],  # Volume
-                [{}],  # Slope
-                [{}],  # Flag
-                [{}],  # Position
-            ],
-            subplot_titles=(
-                f"{branch_name} - Price with Flag-Based Slope Signals",
-                "Volume",
-                f"Slope Indicator ({slope_window}d)",
-                "Flag Status",
-                "Position Status"
-            )
-        )
+        df = merged_data.copy().set_index("Date")
 
         # ======================================================
-        # 1) PRICE PANEL WITH SLOPE SIGNALS
+        # Figure: SINGLE PANEL
         # ======================================================
+        fig = go.Figure()
 
-        # Base price line (light gray)
+        # Base price line
         fig.add_trace(
             go.Scatter(
-                x=df_view.index,
-                y=df_view["Close"],
+                x=df.index,
+                y=df["Close"],
                 mode="lines",
                 line=dict(color=colors["price_base"], width=2),
-                name="Price Base",
-                hoverinfo='skip',
-                showlegend=False
-            ),
-            row=1,
-            col=1,
+                name="Price",
+                hoverinfo="skip"
+            )
         )
-        
-        # Enhanced Moving Averages
-        if len(df_view) > 20:
-            ma_20 = df_view['Close'].rolling(20).mean()
-            fig.add_trace(
-                go.Scatter(
-                    x=df_view.index,
-                    y=ma_20,
-                    mode='lines',
-                    name='MA(20)',
-                    line=dict(color=colors["ma_20"], width=2.5),
-                    hoverinfo='skip'
-                ),
-                row=1, col=1
-            )
-        
-        if len(df_view) > 50:
-            ma_50 = df_view['Close'].rolling(50).mean()
-            fig.add_trace(
-                go.Scatter(
-                    x=df_view.index,
-                    y=ma_50,
-                    mode='lines',
-                    name='MA(50)',
-                    line=dict(color=colors["ma_50"], width=2),
-                    hoverinfo='skip'
-                ),
-                row=1, col=1
-            )
 
-        # -------------------------
-        # SLOPE-BASED COLORED SEGMENTS ON PRICE
-        # -------------------------
-        slope_series = df_view["Slope"]
+        # ======================================================
+        # SLOPE-BASED COLORED SEGMENTS (same logic as existing app)
+        # ======================================================
+        slope_series = df["Slope"]
 
-        # Create slope-only entry/exit logic for visualization
         slope_entry_idx = (slope_series > pos_threshold) & (slope_series.shift(1) <= pos_threshold)
         slope_exit_idx = (slope_series < neg_threshold) & (slope_series.shift(1) >= neg_threshold)
 
         slope_entry_dates = slope_series.index[slope_entry_idx].tolist()
         slope_exit_dates = slope_series.index[slope_exit_idx].tolist()
 
-        # Match entries with exits for slope visualization
         slope_trades = []
         i = j = 0
 
         while i < len(slope_entry_dates) and j < len(slope_exit_dates):
             entry_date = slope_entry_dates[i]
 
-            # Find first exit after this entry
             while j < len(slope_exit_dates) and slope_exit_dates[j] <= entry_date:
                 j += 1
 
             if j < len(slope_exit_dates):
                 exit_date = slope_exit_dates[j]
 
-                entry_price = df_view.loc[entry_date, "Close"]
-                exit_price = df_view.loc[exit_date, "Close"]
+                entry_price = df.loc[entry_date, "Close"]
+                exit_price = df.loc[exit_date, "Close"]
 
-                slope_return = ((exit_price - entry_price) / entry_price) * 100.0
+                slope_return = ((exit_price - entry_price) / entry_price) * 100
 
                 slope_trades.append({
                     "entry_date": entry_date,
                     "exit_date": exit_date,
-                    "entry_price": entry_price,
-                    "exit_price": exit_price,
-                    "return": slope_return,
+                    "return": slope_return
                 })
 
                 j += 1
             i += 1
 
-        # Draw colored segments on price chart for each slope period
-        for trade in slope_trades:
-            mask = (df_view.index >= trade["entry_date"]) & (df_view.index <= trade["exit_date"])
-            segment_data = df_view[mask]
+        # Draw colored segments
+        for seg in slope_trades:
+            mask = (df.index >= seg["entry_date"]) & (df.index <= seg["exit_date"])
+            segment_df = df[mask]
 
-            if len(segment_data) > 1:
-                segment_color = (
-                    colors["slope_segment_green"]
-                    if trade["return"] > 0
-                    else colors["slope_segment_gray"]  # Changed from red to gray
-                )
+            if len(segment_df) > 1:
+                color = colors["slope_segment_green"] if seg["return"] > 0 else colors["slope_segment_gray"]
 
                 fig.add_trace(
                     go.Scatter(
-                        x=segment_data.index,
-                        y=segment_data["Close"],
+                        x=segment_df.index,
+                        y=segment_df["Close"],
                         mode="lines",
-                        line=dict(color=segment_color, width=4),
-                        name="Slope Period",
-                        hoverinfo='skip',
-                        showlegend=False,
-                    ),
-                    row=1,
-                    col=1,
+                        line=dict(color=color, width=4),
+                        name="Slope Segment",
+                        hoverinfo="skip",
+                        showlegend=False
+                    )
                 )
 
-        # -------------------------
-        # RSI+SLOPE TRADE MARKERS (actual trades from signals_df)
-        # -------------------------
+        # ======================================================
+        # ENTRY + EXIT MARKERS
+        # ======================================================
         if not signals_df.empty:
             # Entry markers
             fig.add_trace(
                 go.Scatter(
-                    x=signals_df['Entry_Date'],
-                    y=signals_df['Entry_Price'],
+                    x=signals_df["Entry_Date"],
+                    y=signals_df["Entry_Price"],
                     mode="markers+text",
-                    marker=dict(
-                        color=colors["rsi_entry"],
-                        size=14,
-                        symbol="triangle-up",
-                        line=dict(color="white", width=2),
-                    ),
+                    marker=dict(color=colors["rsi_entry"], size=14, symbol="triangle-up", line=dict(color="white", width=1)),
                     text=["ENTRY"] * len(signals_df),
                     textposition="top center",
-                    name="Trade Entry",
-                    hoverinfo='skip',
-                ),
-                row=1,
-                col=1,
+                    name="Entry",
+                    hoverinfo="skip"
+                )
             )
 
-            # Exit markers with return percentages
-            exit_colors = [
-                colors["rsi_exit_green"] if r > 0 else colors["rsi_exit_gray"]  # Changed from red to gray
-                for r in signals_df['Return_Pct']
-            ]
-            exit_texts = [f"{r:+.1f}%" for r in signals_df['Return_Pct']]
+            # Exit markers
+            exit_colors = [colors["rsi_exit_green"] if r > 0 else colors["rsi_exit_gray"] 
+                        for r in signals_df["Return_Pct"]]
 
             fig.add_trace(
                 go.Scatter(
-                    x=signals_df['Exit_Date'],
-                    y=signals_df['Exit_Price'],
+                    x=signals_df["Exit_Date"],
+                    y=signals_df["Exit_Price"],
                     mode="markers+text",
-                    marker=dict(
-                        color=exit_colors,
-                        size=14,
-                        symbol="triangle-down",
-                        line=dict(color="white", width=2),
-                    ),
-                    text=exit_texts,
+                    marker=dict(color=exit_colors, size=14, symbol="triangle-down", line=dict(color="white", width=1)),
+                    text=[f"{r:+.1f}%" for r in signals_df["Return_Pct"]],
                     textposition="bottom center",
-                    name="Trade Exit",
-                    hoverinfo='skip',
-                ),
-                row=1,
-                col=1,
+                    name="Exit",
+                    hoverinfo="skip"
+                )
             )
 
-        # -------------------------
-        # RSI ACTIVATION MARKERS (Purple triangles when RSI condition first activates)
-        # -------------------------
-        # Find RSI activation points (when Active goes from 0 to 1)
-        rsi_activation_points = df_view[(df_view['Active'] == 1) & (df_view['Active'].shift(1) == 0)]
-        
-        if not rsi_activation_points.empty:
+        # ======================================================
+        # RSI ACTIVATION MARKERS
+        # ======================================================
+        rsi_points = df[(df["Active"] == 1) & (df["Active"].shift(1) == 0)]
+
+        if not rsi_points.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=rsi_activation_points.index,
-                    y=rsi_activation_points['Close'],
+                    x=rsi_points.index,
+                    y=rsi_points["Close"],
                     mode="markers+text",
-                    marker=dict(
-                        color=colors["rsi_activation"],
-                        size=10,
-                        symbol="triangle-up",
-                        line=dict(color="white", width=1.5),
-                    ),
-                    text=["RSI"] * len(rsi_activation_points),
+                    marker=dict(color=colors["rsi_activation"], size=12, symbol="triangle-up"),
+                    text=["RSI"] * len(rsi_points),
                     textposition="top center",
                     name="RSI Activation",
-                    hoverinfo='skip',
-                ),
-                row=1,
-                col=1,
+                    hoverinfo="skip"
+                )
             )
 
-        # -------------------------
-        # FLAG ACTIVATION MARKERS (Purple diamonds when Flag turns to 1)
-        # -------------------------
-        # Find Flag activation points (when Flag goes from 0 to 1)
-        flag_activation_points = df_view[(df_view['Flag'] == 1) & (df_view['Flag'].shift(1) == 0)]
-        
-        if not flag_activation_points.empty:
+        # ======================================================
+        # FLAG ACTIVATION MARKERS
+        # ======================================================
+        flag_points = df[(df["Flag"] == 1) & (df["Flag"].shift(1) == 0)]
+
+        if not flag_points.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=flag_activation_points.index,
-                    y=flag_activation_points['Close'],
+                    x=flag_points.index,
+                    y=flag_points["Close"],
                     mode="markers+text",
-                    marker=dict(
-                        color=colors["rsi_activation"],
-                        size=12,
-                        symbol="diamond",
-                        line=dict(color="white", width=1.5),
-                    ),
-                    text=["FLAG"] * len(flag_activation_points),
+                    marker=dict(color=colors["flag_activation"], size=14, symbol="diamond"),
+                    text=["FLAG"] * len(flag_points),
                     textposition="middle right",
-                    name="Flag Activation",
-                    hoverinfo='skip',
-                ),
-                row=1,
-                col=1,
+                    name="Flag",
+                    hoverinfo="skip"
+                )
             )
 
         # ======================================================
-        # 2) VOLUME PANEL
+        # FINAL CLEAN LAYOUT
         # ======================================================
-        fig.add_trace(
-            go.Bar(
-                x=df_view.index,
-                y=df_view["Volume"],
-                name="Volume",
-                marker_color=colors["volume"],
-                opacity=0.7,
-                hoverinfo='skip',
-            ),
-            row=2,
-            col=1
-        )
+            # ======================================================
+        # FINAL CLEAN LAYOUT + PERIOD SELECTORS
+        # ======================================================
 
-        # ======================================================
-        # 3) SLOPE PANEL
-        # ======================================================
-        fig.add_trace(
-            go.Scatter(
-                x=df_view.index,
-                y=df_view["Slope"],
-                mode="lines",
-                line=dict(color=colors["slope"], width=3),
-                fill="tozeroy",
-                fillcolor="rgba(59, 130, 246, 0.2)",
-                name=f"Slope ({slope_window}d)",
-                hoverinfo='skip',
-            ),
-            row=3,
-            col=1,
-        )
+                # Default view = last 5 years
+        if len(df) > 0:
+            last_date = df.index.max()
+            start_date = last_date - pd.DateOffset(years=5)
+            fig.update_xaxes(range=[start_date, last_date])
 
-        # Entry threshold line
-        fig.add_trace(
-            go.Scatter(
-                x=df_view.index,
-                y=[pos_threshold] * len(df_view),
-                mode="lines",
-                line=dict(color=colors["slope_entry"], width=2, dash="dash"),
-                name=f"Entry Threshold ({pos_threshold}%)",
-                showlegend=False,
-                hoverinfo='skip'
-            ),
-            row=3,
-            col=1,
-        )
-
-        # Exit threshold line
-        fig.add_trace(
-            go.Scatter(
-                x=df_view.index,
-                y=[neg_threshold] * len(df_view),
-                mode="lines",
-                line=dict(color=colors["slope_exit"], width=2, dash="dash"),
-                name=f"Exit Threshold ({neg_threshold}%)",
-                showlegend=False,
-                hoverinfo='skip'
-            ),
-            row=3,
-            col=1,
-        )
-
-        # ======================================================
-        # 4) FLAG PANEL
-        # ======================================================
-        fig.add_trace(
-            go.Scatter(
-                x=df_view.index,
-                y=df_view["Flag"],
-                mode="lines",
-                line=dict(color="#8b5cf6", width=4, shape="hv"),
-                fill="tozeroy",
-                fillcolor="rgba(139, 92, 246, 0.3)",
-                name="Flag Status",
-                hoverinfo='skip',
-            ),
-            row=4,
-            col=1,
-        )
-
-        # ======================================================
-        # 5) POSITION PANEL
-        # ======================================================
-        fig.add_trace(
-            go.Scatter(
-                x=df_view.index,
-                y=df_view["InTrade"],
-                mode="lines",
-                line=dict(color=colors["position"], width=4, shape="hv"),
-                fill="tozeroy",
-                fillcolor="rgba(5, 150, 105, 0.3)",
-                name="Position Status",
-                hoverinfo='skip',
-            ),
-            row=5,
-            col=1,
-        )
-
-        # ======================================================
-        # ENHANCED LAYOUT
-        # ======================================================
-        x_min, x_max = df_view.index.min(), df_view.index.max()
 
         fig.update_layout(
             template="plotly_white",
-            hovermode=False,  # Disable hover information
-            showlegend=True,
+            hovermode=False,
+            height=750,
+            margin=dict(l=60, r=40, t=100, b=60),  # More top margin for selector buttons
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
-                y=1.02,
+                y=1.06,
                 xanchor="right",
                 x=1,
-                font=dict(family="Inter", size=11),
-                bgcolor="rgba(255, 255, 255, 0.8)",
-                bordercolor="rgba(0, 0, 0, 0.2)",
+                bgcolor="rgba(255,255,255,0.7)",
+                bordercolor="rgba(0,0,0,0.2)",
                 borderwidth=1
             ),
-            height=1100,
-            margin=dict(l=80, r=60, t=80, b=80),
-            font=dict(family="Inter", size=12),
             title=dict(
-                text=f"<b>{branch_name}</b> - Comprehensive Slope Trading Analysis",
-                font=dict(size=16, color="#1f2937"),
-                x=0.5
+                text=f"<b>{branch_name}</b> — Price + Slope Segments + Signals",
+                x=0.5,
+                y=0.98,
+                font=dict(size=18)
             ),
-            # Add crosshair lines for all panels (both X and Y spikes)
+
+            # ====================================
+            # PERIOD SELECTOR BUTTONS (VISIBLE!)
+            # ====================================
             xaxis=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
+                rangeselector=dict(
+                    buttons=[
+                        dict(count=7, label="7D", step="day", stepmode="backward"),
+                        dict(count=1, label="1M", step="month", stepmode="backward"),
+                        dict(count=3, label="3M", step="month", stepmode="backward"),
+                        dict(count=6, label="6M", step="month", stepmode="backward"),
+                        dict(count=1, label="1Y", step="year", stepmode="backward"),
+                        dict(count=2, label="2Y", step="year", stepmode="backward"),
+                        dict(count=3, label="3Y", step="year", stepmode="backward"),
+                        dict(count=4, label="4Y", step="year", stepmode="backward"),
+                        dict(count=5, label="5Y", step="year", stepmode="backward"),
+                        dict(step="all", label="ALL"),
+                    ],
+                    bgcolor="rgba(255,255,255,0.9)",
+                    bordercolor="rgba(0,0,0,0.3)",
+                    borderwidth=1,
+                    font=dict(size=12)
+                ),
+
+                rangeslider=dict(
+                    visible=True,
+                    thickness=0.05,
+                    bgcolor="rgba(230,230,230,0.4)"
+                ),
+
+                type="date"
             ),
+
+
             yaxis=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
+                title="Price",
+                tickformat="$,.2f",
+                gridcolor="rgba(0,0,0,0.1)"
             ),
-            xaxis2=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
-            ),
-            yaxis2=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
-            ),
-            xaxis3=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
-            ),
-            yaxis3=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
-            ),
-            xaxis4=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
-            ),
-            yaxis4=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
-            ),
-            xaxis5=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
-            ),
-            yaxis5=dict(
-                showspikes=True, 
-                spikemode='across', 
-                spikesnap='cursor', 
-                spikedash='solid', 
-                spikecolor='rgba(0,0,0,0.4)', 
-                spikethickness=1
-            )
-        )
-
-        # Apply crosshairs globally to ALL axes (this ensures both horizontal and vertical lines)
-        fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', spikedash='solid', spikecolor='rgba(0,0,0,0.6)', spikethickness=1)
-        fig.update_yaxes(showspikes=True, spikemode='across', spikesnap='cursor', spikedash='solid', spikecolor='rgba(0,0,0,0.6)', spikethickness=1)
-
-        # Enhanced X-axis with range selector and slider
-        fig.update_xaxes(
-            range=[x_min, x_max],
-            rangeselector=dict(
-                buttons=[
-                    dict(count=7, label="7D", step="day", stepmode="backward"),
-                    dict(count=1, label="1M", step="month", stepmode="backward"),
-                    dict(count=3, label="3M", step="month", stepmode="backward"),
-                    dict(count=6, label="6M", step="month", stepmode="backward"),
-                    dict(count=1, label="1Y", step="year", stepmode="backward"),
-                    dict(count=2, label="2Y", step="year", stepmode="backward"),
-                    dict(step="all", label="All"),
-                ],
-                bgcolor="rgba(255, 255, 255, 0.8)",
-                bordercolor="rgba(0, 0, 0, 0.2)",
-                borderwidth=1
-            ),
-            rangeslider=dict(
-                visible=True,
-                thickness=0.05,
-                bgcolor="rgba(248, 249, 250, 0.8)"
-            ),
-            type="date",
-            row=5,
-            col=1,
-        )
-
-        # Y-axis formatting with crosshair spikes
-        fig.update_yaxes(
-            title_text="Price (USD)", 
-            tickformat="$,.2f", 
-            row=1, 
-            col=1,
-            gridcolor="rgba(0, 0, 0, 0.1)",
-            title_font=dict(size=12, color="#374151"),
-            showspikes=True,
-            spikecolor="rgba(0, 0, 0, 0.6)",
-            spikethickness=1,
-            spikedash="solid"
-        )
-        fig.update_yaxes(
-            title_text="Volume", 
-            row=2, 
-            col=1, 
-            showgrid=False,
-            title_font=dict(size=12, color="#374151"),
-            showspikes=True,
-            spikecolor="rgba(0, 0, 0, 0.6)",
-            spikethickness=1,
-            spikedash="solid"
-        )
-        fig.update_yaxes(
-            title_text="Slope (%)", 
-            row=3, 
-            col=1,
-            gridcolor="rgba(0, 0, 0, 0.1)",
-            title_font=dict(size=12, color="#374151"),
-            showspikes=True,
-            spikecolor="rgba(0, 0, 0, 0.6)",
-            spikethickness=1,
-            spikedash="solid"
-        )
-        fig.update_yaxes(
-            title_text="Flag", 
-            row=4, 
-            col=1, 
-            range=[-0.1, 1.1],
-            tickvals=[0, 1],
-            ticktext=["Off", "On"],
-            gridcolor="rgba(0, 0, 0, 0.1)",
-            title_font=dict(size=12, color="#374151"),
-            showspikes=True,
-            spikecolor="rgba(0, 0, 0, 0.6)",
-            spikethickness=1,
-            spikedash="solid"
-        )
-        fig.update_yaxes(
-            title_text="Position", 
-            row=5, 
-            col=1, 
-            range=[-0.1, 1.1],
-            tickvals=[0, 1],
-            ticktext=["Out", "In"],
-            gridcolor="rgba(0, 0, 0, 0.1)",
-            title_font=dict(size=12, color="#374151"),
-            showspikes=True,
-            spikecolor="rgba(0, 0, 0, 0.6)",
-            spikethickness=1,
-            spikedash="solid"
         )
 
         return fig
+
 
 # Initialize the analyzer
 @st.cache_resource

@@ -364,6 +364,7 @@ class SlopeTradingAnalyzer:
         - Colored slope segments (green/gray)
         - Entry markers
         - Exit markers with % return
+        - Vertical entry/exit lines (FULL HEIGHT)
         - RSI activation markers
         - Flag activation markers
         Limited to last 5 years of data.
@@ -474,12 +475,35 @@ class SlopeTradingAnalyzer:
         # ======================================================
         # ENTRY + EXIT MARKERS
         # ======================================================
+        shapes = []  # for vertical lines
+
         if not signals_df.empty:
-            # Restrict signals to last 5 years too
             mask_signals = signals_df["Entry_Date"] >= df.index.min()
             s_df = signals_df[mask_signals].copy()
 
             if not s_df.empty:
+                # Full-height ENTRY lines
+                for d in s_df["Entry_Date"]:
+                    shapes.append(dict(
+                        type="line",
+                        x0=d, x1=d,
+                        y0=0, y1=1,
+                        xref="x",
+                        yref="paper",
+                        line=dict(color="rgba(59,130,246,0.40)", width=1.2, dash="dot")
+                    ))
+
+                # Full-height EXIT lines
+                for d in s_df["Exit_Date"]:
+                    shapes.append(dict(
+                        type="line",
+                        x0=d, x1=d,
+                        y0=0, y1=1,
+                        xref="x",
+                        yref="paper",
+                        line=dict(color="rgba(22,163,74,0.40)", width=1.2, dash="dot")
+                    ))
+
                 # Entry markers
                 fig.add_trace(
                     go.Scatter(
@@ -497,7 +521,7 @@ class SlopeTradingAnalyzer:
 
                 # Exit markers
                 exit_colors = [colors["rsi_exit_green"] if r > 0 else colors["rsi_exit_gray"]
-                               for r in s_df["Return_Pct"]]
+                            for r in s_df["Return_Pct"]]
 
                 fig.add_trace(
                     go.Scatter(
@@ -514,7 +538,7 @@ class SlopeTradingAnalyzer:
                 )
 
         # ======================================================
-        # RSI ACTIVATION MARKERS
+        # RSI ACTIVATION
         # ======================================================
         if "Active" in df.columns:
             rsi_points = df[(df["Active"] == 1) & (df["Active"].shift(1) == 0)]
@@ -534,7 +558,7 @@ class SlopeTradingAnalyzer:
                 )
 
         # ======================================================
-        # FLAG ACTIVATION MARKERS
+        # FLAG ACTIVATION
         # ======================================================
         if "Flag" in df.columns:
             flag_points = df[(df["Flag"] == 1) & (df["Flag"].shift(1) == 0)]
@@ -554,18 +578,14 @@ class SlopeTradingAnalyzer:
                 )
 
         # ======================================================
-        # FINAL CLEAN LAYOUT + PERIOD SELECTORS
-        # ======================================================
-                # ======================================================
-        # FINAL CLEAN LAYOUT + PERIOD SELECTORS + BETTER GRIDLINES
+        # FINAL CLEAN LAYOUT
         # ======================================================
 
         last_date = df.index.max()
         start_date = df.index.min()
 
-        fig.update_xaxes(range=[start_date, last_date])
-
         fig.update_layout(
+            shapes=shapes,   # <-- vertical lines added here
             template="plotly_white",
             hovermode=False,
             height=750,
@@ -587,16 +607,15 @@ class SlopeTradingAnalyzer:
                 font=dict(size=18)
             ),
 
-            # ---------------------------  
-            # *** IMPROVED GRID & AXES ***  
-            # ---------------------------  
+            # X-AXIS
             xaxis=dict(
+                range=[start_date, last_date],
                 showgrid=True,
-                gridcolor="rgba(0,0,0,0.15)",    # darker major grid
+                gridcolor="rgba(0,0,0,0.15)",
                 gridwidth=1,
                 zeroline=False,
                 showline=True,
-                linecolor="rgba(0,0,0,0.40)",    # axis line darker
+                linecolor="rgba(0,0,0,0.40)",
                 linewidth=1.2,
                 rangeselector=dict(
                     buttons=[
@@ -624,21 +643,22 @@ class SlopeTradingAnalyzer:
                 type="date"
             ),
 
+            # Y-AXIS
             yaxis=dict(
                 title="Price",
                 tickformat="$,.2f",
                 showgrid=True,
-                gridcolor="rgba(0,0,0,0.12)",     # readable gray
+                gridcolor="rgba(0,0,0,0.12)",
                 gridwidth=1.2,
                 zeroline=False,
                 showline=True,
-                linecolor="rgba(0,0,0,0.40)",     # darker axis line
+                linecolor="rgba(0,0,0,0.40)",
                 linewidth=1.2,
             ),
         )
 
-
         return fig
+
 
 
 # Initialize the analyzer

@@ -659,6 +659,133 @@ class SlopeTradingAnalyzer:
 
         return fig
 
+    def create_rsi_chart(self, ticker_df, branch_df):
+        """
+        Gray Candlestick + RSI + RSI Trigger Markers (Active = 1).
+        """
+
+        df = ticker_df.copy()
+        df = df.merge(branch_df[['Date', 'Active']], on='Date', how='left')
+        df = df.sort_values("Date")
+        df['Active'] = df['Active'].fillna(0)
+
+        # -------------------------
+        # Compute RSI if missing
+        # -------------------------
+        if "RSI" not in df.columns:
+            window = 14
+            delta = df["Close"].diff()
+            gain = np.where(delta > 0, delta, 0)
+            loss = np.where(delta < 0, -delta, 0)
+            avg_gain = pd.Series(gain).rolling(window).mean()
+            avg_loss = pd.Series(loss).rolling(window).mean()
+            rs = avg_gain / avg_loss
+            df["RSI"] = 100 - (100 / (1 + rs))
+
+        # RSI triggers = Active turns 0 → 1
+        rsi_triggers = df[(df["Active"] == 1) & (df["Active"].shift(1) == 0)]
+
+        # -------------------------
+        # Build figure
+        # -------------------------
+        from plotly.subplots import make_subplots
+
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            row_heights=[0.65, 0.35],
+            subplot_titles=("Gray Candlestick Chart", "RSI + Triggers")
+        )
+
+        # -------------------------
+        # Gray candles
+        # -------------------------
+        fig.add_trace(
+            go.Candlestick(
+                x=df["Date"],
+                open=df["Open"],
+                high=df["High"],
+                low=df["Low"],
+                close=df["Close"],
+                increasing_line_color="gray",
+                decreasing_line_color="gray",
+                increasing_fillcolor="gray",
+                decreasing_fillcolor="gray",
+                name="Candles"
+            ),
+            row=1, col=1
+        )
+
+        # -------------------------
+        # RSI line
+        # -------------------------
+        fig.add_trace(
+            go.Scatter(
+                x=df["Date"],
+                y=df["RSI"],
+                mode="lines",
+                line=dict(color="purple", width=2),
+                name="RSI"
+            ),
+            row=2, col=1
+        )
+
+        # Overbought/oversold lines
+        fig.add_trace(
+            go.Scatter(
+                x=df["Date"], y=[70] * len(df),
+                mode="lines", line=dict(color="lightgray", dash="dash"),
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df["Date"], y=[30] * len(df),
+                mode="lines", line=dict(color="lightgray", dash="dash"),
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+
+        # -------------------------
+        # RSI trigger markers
+        # -------------------------
+        if not rsi_triggers.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=rsi_triggers["Date"],
+                    y=rsi_triggers["RSI"],
+                    mode="markers+text",
+                    marker=dict(
+                        color="blue",
+                        size=12,
+                        symbol="triangle-up"
+                    ),
+                    text=["RSI"] * len(rsi_triggers),
+                    textposition="top center",
+                    name="RSI Trigger"
+                ),
+                row=2, col=1
+            )
+
+        # -------------------------
+        # Layout
+        # -------------------------
+        fig.update_layout(
+            template="plotly_white",
+            height=650,
+            margin=dict(l=50, r=40, t=80, b=40),
+            showlegend=True
+        )
+
+        fig.update_yaxes(title_text="Price", row=1, col=1)
+        fig.update_yaxes(title_text="RSI", row=2, col=1, range=[0, 100])
+
+        return fig
+
 
 
 # Initialize the analyzer
@@ -843,7 +970,12 @@ def main():
                             slope_window, pos_threshold, neg_threshold
                         )
                         st.plotly_chart(chart, use_container_width=True)
-                    
+
+                        st.subheader("RSI Trigger Chart (Gray Candles)")
+                        rsi_chart = analyzer.create_rsi_chart(ticker_data, branch_data)
+                        st.plotly_chart(rsi_chart, use_container_width=True)
+
+                                        
                     # Trade details
                     if not signals_df.empty:
                         st.subheader("Trade Details")

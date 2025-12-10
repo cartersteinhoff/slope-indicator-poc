@@ -998,8 +998,6 @@ def main():
                     st.subheader(f"Performance Metrics - {branch_pretty}")
                     display_metrics_row(metrics, yearly)
 
-                    st.divider()
-                    
                     # Price chart (last 5 years max)
                     if show_individual_charts:
                         st.subheader("Price Chart with Slope Segments & Signals (Last 5 Years Max)")

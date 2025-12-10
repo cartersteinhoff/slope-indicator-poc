@@ -835,38 +835,43 @@ def display_metrics_row(metrics, yearly_dict):
         st.warning("No metrics available.")
         return
 
-    # Get all years from data, sorted descending
     available_years = sorted(yearly_dict.keys(), reverse=True) if yearly_dict else []
 
-    # Build year cards HTML
-    year_cards_html = ""
-    for year in available_years:
-        stats = yearly_dict[year]
-        border_color = "#2ecc71" if stats["Return"] > 0 else "#e74c3c"
-        year_cards_html += f'<div style="background: #f8f9fa; padding: 1rem 1.5rem; border-left: 6px solid {border_color}; border-radius: 8px; min-width: 180px; flex-shrink: 0;"><div style="font-weight: 700; font-size: 1.3rem; margin-bottom: 0.4rem;">{year}</div><div style="font-size: 1.1rem;">Return: {stats["Return"]:.2f}%</div><div style="font-size: 1.1rem;">Max DD: {stats["MaxDD"]:.2f}%</div><div style="font-size: 1.1rem;">Trades: {stats["Trades"]}</div><div style="font-size: 1.1rem;">Avg Hold: {stats["AvgHold"]:.1f} days</div></div>'
-
-    # Full layout: Total card fixed + scrollable years container
     total_return = metrics.get('Total_Return_Pct', 0)
     win_rate = metrics.get('Win_Rate_Pct', 0)
     max_dd = metrics.get('Max_Drawdown_Pct', 0)
     num_trades = metrics.get('Num_Trades', 0)
     avg_hold = metrics.get('Avg_Days_Held', 0)
 
-    html = f'''<div style="display: flex; gap: 16px; align-items: flex-start;">
-<div style="background: #f8f9fa; padding: 1rem 1.5rem; border-left: 6px solid #667eea; border-radius: 8px; min-width: 200px; flex-shrink: 0;">
-<div style="font-weight: 700; font-size: 1.3rem; margin-bottom: 0.4rem;">Total</div>
-<div style="font-size: 1.1rem;">Return: {total_return:.2f}%</div>
-<div style="font-size: 1.1rem;">Win Rate: {win_rate:.2f}%</div>
-<div style="font-size: 1.1rem;">Max DD: {max_dd:.2f}%</div>
-<div style="font-size: 1.1rem;">Trades: {num_trades}</div>
-<div style="font-size: 1.1rem;">Avg Hold: {avg_hold:.1f} days</div>
-</div>
-<div style="display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px; flex-grow: 1;">
-{year_cards_html}
-</div>
-</div>'''
+    # Create columns: Total card area (with toggle) + yearly cards area
+    col_total, col_years = st.columns([1, 4])
 
-    st.markdown(html, unsafe_allow_html=True)
+    with col_total:
+        # Small toggle checkbox above Total card
+        collapsed = st.checkbox("Collapse others", key="metrics_collapsed")
+
+        # Total card HTML
+        total_html = f'''
+        <div style="background: #f8f9fa; padding: 1rem 1.5rem; border-left: 6px solid #667eea; border-radius: 8px;">
+        <div style="font-weight: 700; font-size: 1.3rem; margin-bottom: 0.4rem;">Total</div>
+        <div style="font-size: 1.1rem;">Return: {total_return:.2f}%</div>
+        <div style="font-size: 1.1rem;">Win Rate: {win_rate:.2f}%</div>
+        <div style="font-size: 1.1rem;">Max DD: {max_dd:.2f}%</div>
+        <div style="font-size: 1.1rem;">Trades: {num_trades}</div>
+        <div style="font-size: 1.1rem;">Avg Hold: {avg_hold:.1f} days</div>
+        </div>'''
+        st.markdown(total_html, unsafe_allow_html=True)
+
+    # Only show yearly cards if not collapsed
+    if not collapsed:
+        with col_years:
+            year_cards_html = ""
+            for year in available_years:
+                stats = yearly_dict[year]
+                border_color = "#2ecc71" if stats["Return"] > 0 else "#e74c3c"
+                year_cards_html += f'<div style="background: #f8f9fa; padding: 1rem 1.5rem; border-left: 6px solid {border_color}; border-radius: 8px; min-width: 180px; flex-shrink: 0; display: inline-block; margin-right: 16px;"><div style="font-weight: 700; font-size: 1.3rem; margin-bottom: 0.4rem;">{year}</div><div style="font-size: 1.1rem;">Return: {stats["Return"]:.2f}%</div><div style="font-size: 1.1rem;">Max DD: {stats["MaxDD"]:.2f}%</div><div style="font-size: 1.1rem;">Trades: {stats["Trades"]}</div><div style="font-size: 1.1rem;">Avg Hold: {stats["AvgHold"]:.1f} days</div></div>'
+
+            st.markdown(f'<div style="display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px;">{year_cards_html}</div>', unsafe_allow_html=True)
 
 
 

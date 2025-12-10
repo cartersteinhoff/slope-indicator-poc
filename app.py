@@ -697,13 +697,6 @@ class SlopeTradingAnalyzer:
                 bordercolor="rgba(0,0,0,0.2)",
                 borderwidth=1
             ),
-            title=dict(
-                text=f"<b>{branch_name}</b> — Price + Slope Segments + Signals (Last 5 Years Max)",
-                x=0,
-                xanchor='left',
-                y=0.98,
-                font=dict(size=18)
-            ),
 
             # X-AXIS
             xaxis=dict(

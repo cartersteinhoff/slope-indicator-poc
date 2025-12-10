@@ -59,7 +59,27 @@ st.markdown(
     .sidebar .sidebar-content {
         background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
     }
-    
+
+    /* Larger sidebar text */
+    [data-testid="stSidebar"] {
+        font-size: 1.1rem;
+    }
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stSelectbox,
+    [data-testid="stSidebar"] .stSlider,
+    [data-testid="stSidebar"] .stRadio,
+    [data-testid="stSidebar"] .stCheckbox,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div {
+        font-size: 1.1rem !important;
+    }
+    [data-testid="stSidebar"] h1 { font-size: 2rem !important; }
+    [data-testid="stSidebar"] h2 { font-size: 1.6rem !important; }
+    [data-testid="stSidebar"] h3 { font-size: 1.4rem !important; }
+    [data-testid="stSidebar"] h4 { font-size: 1.25rem !important; }
+
     h1 {
         color: #2c3e50;
         font-weight: 700;
@@ -630,12 +650,6 @@ class SlopeTradingAnalyzer:
                 bordercolor="rgba(0,0,0,0.2)",
                 borderwidth=1,
             ),
-            title=dict(
-                text=f"<b>{branch_name}</b> — Price + Slope Segments + Signals (Last 5 Years Max)",
-                x=0.5,
-                y=0.98,
-                font=dict(size=18),
-            ),
             xaxis=dict(
                 range=[start_date, last_date],
                 showgrid=True,
@@ -831,6 +845,67 @@ class SlopeTradingAnalyzer:
         rsi = 100 - (100 / (1 + rs))
         return rsi
 
+    def compute_branch_cagr(self, total_return_pct, years):
+        """Compute CAGR from total return percentage and years."""
+        if years <= 0 or total_return_pct is None:
+            return 0.0
+        total_return_decimal = total_return_pct / 100.0
+        if total_return_decimal <= -1:
+            return -100.0
+        cagr = ((1 + total_return_decimal) ** (1 / years) - 1) * 100
+        return cagr
+
+    def compute_all_branch_overviews(self, branches, slope_window, pos_threshold, neg_threshold):
+        """Compute overview metrics for all branches."""
+        overview_data = []
+        for branch in branches:
+            branch_data = self.load_branch_data(branch)
+            if branch_data is None:
+                continue
+
+            ticker = self.extract_ticker_from_branch(branch)
+            if not ticker:
+                continue
+
+            ticker_data = self.load_ticker_data(ticker)
+            if ticker_data is None:
+                continue
+
+            merged_data, signals_df = self.apply_slope_filter(
+                branch_data, ticker_data, slope_window, pos_threshold, neg_threshold
+            )
+
+            if signals_df.empty:
+                continue
+
+            metrics = self.calculate_performance_metrics(signals_df)
+            total_return = metrics.get('Total_Return_Pct', 0)
+
+            first_entry = signals_df['Entry_Date'].min()
+            last_exit = signals_df['Exit_Date'].max()
+            days_span = (last_exit - first_entry).days
+            years_float = days_span / 365.25 if days_span > 0 else 0
+
+            period_str = f"{first_entry.strftime('%Y-%m-%d')} to {last_exit.strftime('%Y-%m-%d')}"
+
+            cagr = self.compute_branch_cagr(total_return, years_float)
+
+            overview_data.append({
+                'Ticker': ticker,
+                'Branch': clean_branch_name(branch),
+                'Branch_Raw': branch,
+                'Period': period_str,
+                'Return %': round(total_return, 2),
+                'Max DD %': round(metrics.get('Max_Drawdown_Pct', 0), 2),
+                'CAGR %': round(cagr, 2),
+                'Years': round(years_float, 1),
+                'TIM %': round(metrics.get('Time_In_Market_Pct', 0), 2),
+                'Win Rate %': round(metrics.get('Win_Rate_Pct', 0), 2),
+                'Trades': metrics.get('Num_Trades', 0)
+            })
+
+        return pd.DataFrame(overview_data)
+
 
 # ─────────────────────────────
 # Streamlit helpers
@@ -961,8 +1036,8 @@ def main():
     # Params snapshot for overall caching
     current_params = (slope_window, pos_threshold, neg_threshold)
 
-    tab_individual, tab_overall, tab_reports = st.tabs(
-        ["Individual Analysis", "Overall Results", "Detailed Reports"]
+    tab_individual, tab_overall, tab_reports, tab_overviews = st.tabs(
+        ["Individual Analysis", "Overall Results", "Detailed Reports", "Branch Overviews"]
     )
 
     # ───────── Individual Analysis ─────────
@@ -1184,6 +1259,36 @@ def main():
             st.table(param_df)
         else:
             st.info("Run the Overall Results tab at least once to populate the reports.")
+
+    # ───────── Branch Overviews ─────────
+    with tab_overviews:
+        st.header("Branch Overviews")
+
+        with st.spinner("Computing metrics for all branches..."):
+            overview_df = analyzer.compute_all_branch_overviews(
+                all_branches, slope_window, pos_threshold, neg_threshold
+            )
+
+        if not overview_df.empty:
+            st.subheader(f"All Branches ({len(overview_df)} total)")
+
+            display_df = overview_df.drop(columns=['Branch_Raw'])
+
+            html_table = display_df.to_html(index=False, border=0, escape=False)
+            styled_html = f"""
+            <div style="overflow-x: auto;">
+            <style>
+            .overview-table {{ font-size: 1.15rem !important; width: 100%; border-collapse: collapse; }}
+            .overview-table th {{ background-color: #f0f2f6; padding: 12px 10px; text-align: left; border-bottom: 2px solid #ccc; font-weight: 600; }}
+            .overview-table td {{ padding: 10px; border-bottom: 1px solid #eee; }}
+            .overview-table tr:hover {{ background-color: #f5f5f5; }}
+            </style>
+            {html_table.replace('class="dataframe"', 'class="dataframe overview-table"')}
+            </div>
+            """
+            st.markdown(styled_html, unsafe_allow_html=True)
+        else:
+            st.warning("No branch data available.")
 
 
 if __name__ == "__main__":

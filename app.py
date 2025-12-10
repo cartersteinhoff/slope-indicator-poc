@@ -847,20 +847,26 @@ def display_metrics_row(metrics, yearly_dict):
     col_total, col_years = st.columns([1, 4])
 
     with col_total:
-        # Small toggle checkbox above Total card
+        # Total card container with toggle inside
+        st.markdown('''
+        <div style="background: #f8f9fa; padding: 1rem 1.5rem; border-left: 6px solid #667eea; border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+        <span style="font-weight: 700; font-size: 1.3rem;">Total</span>
+        </div>
+        ''', unsafe_allow_html=True)
+
+        # Checkbox inside the card area
         collapsed = st.checkbox("Collapse others", key="metrics_collapsed")
 
-        # Total card HTML
-        total_html = f'''
-        <div style="background: #f8f9fa; padding: 1rem 1.5rem; border-left: 6px solid #667eea; border-radius: 8px;">
-        <div style="font-weight: 700; font-size: 1.3rem; margin-bottom: 0.4rem;">Total</div>
+        # Rest of Total card metrics
+        st.markdown(f'''
         <div style="font-size: 1.1rem;">Return: {total_return:.2f}%</div>
         <div style="font-size: 1.1rem;">Win Rate: {win_rate:.2f}%</div>
         <div style="font-size: 1.1rem;">Max DD: {max_dd:.2f}%</div>
         <div style="font-size: 1.1rem;">Trades: {num_trades}</div>
         <div style="font-size: 1.1rem;">Avg Hold: {avg_hold:.1f} days</div>
-        </div>'''
-        st.markdown(total_html, unsafe_allow_html=True)
+        </div>
+        ''', unsafe_allow_html=True)
 
     # Only show yearly cards if not collapsed
     if not collapsed:

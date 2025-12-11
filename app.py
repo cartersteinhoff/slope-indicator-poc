@@ -673,6 +673,32 @@ class SlopeTradingAnalyzer:
                     )
                 )
 
+        # ======================================================
+        # RSI TRIGGER MARKERS (purple up arrows)
+        # ======================================================
+        if "Active" in df.columns:
+            # RSI trigger = Active transitions from 0 to 1
+            rsi_trigger_idx = (df["Active"] == 1) & (df["Active"].shift(1) == 0)
+            rsi_trigger_dates = df.index[rsi_trigger_idx].tolist()
+
+            if rsi_trigger_dates:
+                rsi_trigger_prices = df.loc[rsi_trigger_dates, "Close"].tolist()
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=rsi_trigger_dates,
+                        y=rsi_trigger_prices,
+                        mode="markers",
+                        marker=dict(
+                            color=colors["rsi_activation"],
+                            size=12,
+                            symbol="triangle-up",
+                            line=dict(color="white", width=1)
+                        ),
+                        name="RSI Trigger",
+                        hoverinfo="skip"
+                    )
+                )
 
         # ======================================================
         # FINAL CLEAN LAYOUT
@@ -882,7 +908,6 @@ def main():
     # Sidebar configuration
     with st.sidebar:
         st.markdown("<h4 style='text-align: center; font-size: 18px; line-height: 1.4;'>Advanced RSI + Slope Filter<br>Backtesting System</h4>", unsafe_allow_html=True)
-        st.header("🔧 Configuration")
         
         # Slope parameters
         st.subheader("Slope Parameters")
@@ -895,12 +920,22 @@ def main():
         # Branch selection (ALL branches selected internally)
         st.subheader("Branch Selection")
 
-        # Signal type filter
-        signal_type = st.radio(
+        # Signal type filter (synced via session state)
+        if "signal_type" not in st.session_state:
+            st.session_state.signal_type = "Both"
+
+        def sync_signal_type_sidebar():
+            st.session_state.signal_type = st.session_state.signal_type_sidebar
+
+        st.radio(
             "Signal Type",
             ["Both", "RSI", "Slope"],
-            horizontal=True
+            horizontal=True,
+            key="signal_type_sidebar",
+            index=["Both", "RSI", "Slope"].index(st.session_state.signal_type),
+            on_change=sync_signal_type_sidebar
         )
+        signal_type = st.session_state.signal_type
 
         available_branches = analyzer.load_available_branches()
 
@@ -994,8 +1029,24 @@ def main():
                     metrics = analyzer.calculate_performance_metrics(signals_df)
                     yearly = analyzer.compute_yearly_stats(signals_df)
 
-                    # Display metrics in single row: Total | 2025 | 2024 | 2023 | 2022 | 2021
-                    st.subheader(f"Performance Metrics - {branch_pretty}")
+                    # Display metrics header with signal type filter on the right
+                    def sync_signal_type_main():
+                        st.session_state.signal_type = st.session_state.signal_type_main
+
+                    metrics_header_col, filter_col = st.columns([4, 1])
+                    with metrics_header_col:
+                        st.subheader(f"Performance Metrics - {branch_pretty}")
+                    with filter_col:
+                        st.radio(
+                            "Signal Type",
+                            ["Both", "RSI", "Slope"],
+                            horizontal=True,
+                            key="signal_type_main",
+                            index=["Both", "RSI", "Slope"].index(st.session_state.signal_type),
+                            on_change=sync_signal_type_main,
+                            label_visibility="collapsed"
+                        )
+
                     display_metrics_row(metrics, yearly)
 
                     # Price chart (last 5 years max)

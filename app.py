@@ -263,160 +263,172 @@ class SlopeTradingAnalyzer:
         return [b for b in branches if self.extract_ticker_from_branch(b) == ticker]
     
     def calculate_slope(self, prices, window):
-        """Calculate slope over a rolling window"""
-        slopes = []
-        for i in range(len(prices)):
-            if i < window - 1:
-                slopes.append(np.nan)
-            else:
-                y = prices[i-window+1:i+1].values
-                x = np.arange(len(y))
-                if len(y) > 1:
-                    slope = np.polyfit(x, y, 1)[0]
-                    # Convert to percentage
-                    slope_pct = (slope * (window-1) / y[0]) * 100 if y[0] != 0 else 0
-                    slopes.append(slope_pct)
-                else:
-                    slopes.append(np.nan)
+        """Calculate slope over a rolling window (fully vectorized)"""
+        prices_arr = prices.values.astype(float)
+        n = len(prices_arr)
+
+        # Pre-compute x values
+        x = np.arange(window)
+        x_mean = x.mean()
+        x_var = ((x - x_mean) ** 2).sum()
+
+        # Create sliding windows using stride tricks
+        shape = (n - window + 1, window)
+        strides = (prices_arr.strides[0], prices_arr.strides[0])
+        windows = np.lib.stride_tricks.as_strided(prices_arr, shape=shape, strides=strides)
+
+        # Vectorized slope calculation for all windows at once
+        y_means = windows.mean(axis=1)
+        slopes_raw = ((x - x_mean) * (windows - y_means[:, np.newaxis])).sum(axis=1) / x_var
+
+        # Get base prices (first value in each window)
+        base_prices = windows[:, 0]
+
+        # Convert to percentage (vectorized)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            slope_pcts = np.where(
+                base_prices != 0,
+                (slopes_raw * (window - 1) / base_prices) * 100,
+                0
+            )
+
+        # Pad with NaNs at the beginning
+        slopes = np.full(n, np.nan)
+        slopes[window - 1:] = slope_pcts
+
         return pd.Series(slopes, index=prices.index)
     
     def apply_slope_filter(self, branch_data, ticker_data, slope_window, pos_threshold, neg_threshold, signal_type="Both"):
-        """Apply slope filtering with Flag-based trading logic
+        """Apply slope filtering with Flag-based trading logic (optimized with numpy arrays)
 
         signal_type: "Both" (RSI + Slope), "RSI" (RSI only), "Slope" (Slope only)
         """
         # Merge branch data with ticker data
         merged = pd.merge(branch_data, ticker_data[['Date', 'Close', 'Volume']], on='Date', how='left')
-        merged = merged.sort_values('Date')
+        merged = merged.sort_values('Date').reset_index(drop=True)
 
         # Calculate slope
         merged['Slope'] = self.calculate_slope(merged['Close'], slope_window)
 
-        # Initialize new columns
-        merged['Flag'] = 0  # Flag for RSI activation
-        merged['Entry_Signal'] = 0
-        merged['Exit_Signal'] = 0
-        merged['InTrade'] = 0
+        # Extract numpy arrays for fast access
+        n = len(merged)
+        slopes = merged['Slope'].values
+        actives = merged['Active'].values
+        closes = merged['Close'].values
+        dates = merged['Date'].values
 
-        # Flag and trading logic
+        # Pre-allocate output arrays
+        flags = np.zeros(n, dtype=np.int32)
+        entry_signals = np.zeros(n, dtype=np.int32)
+        exit_signals = np.zeros(n, dtype=np.int32)
+        in_trades = np.zeros(n, dtype=np.int32)
+
+        # State variables
         flag = 0
         in_position = False
-        entry_price = None
+        entry_price = 0.0
         entry_date = None
+        entry_idx = 0
 
         signals = []
 
-        for i in range(len(merged)):
-            row = merged.iloc[i]
+        for i in range(n):
+            slope = slopes[i]
+            active = actives[i]
+            close = closes[i]
+            date = dates[i]
 
-            if pd.isna(row['Slope']):
-                merged.at[merged.index[i], 'Flag'] = flag
+            if np.isnan(slope):
+                flags[i] = flag
                 continue
 
             # Flag logic: Flag turns to 1 when RSI gets activated
-            if row['Active'] == 1 and flag == 0:
+            if active == 1 and flag == 0:
                 flag = 1
 
             if signal_type == "Both":
-                # BOTH: RSI activates flag, then slope confirms entry
-                # Entry condition: Slope is positive (green) AND Flag is 1
-                if not in_position and flag == 1 and row['Slope'] > pos_threshold:
+                if not in_position and flag == 1 and slope > pos_threshold:
                     in_position = True
-                    entry_price = row['Close']
-                    entry_date = row['Date']
-                    merged.at[merged.index[i], 'Entry_Signal'] = 1
-                    merged.at[merged.index[i], 'InTrade'] = 1
-
+                    entry_price = close
+                    entry_date = date
+                    entry_signals[i] = 1
+                    in_trades[i] = 1
                 elif in_position:
-                    merged.at[merged.index[i], 'InTrade'] = 1
-
-                    # Exit condition: Slope falls below positive threshold
-                    if row['Slope'] <= pos_threshold:
+                    in_trades[i] = 1
+                    if slope <= pos_threshold:
                         in_position = False
-                        exit_price = row['Close']
-                        exit_date = row['Date']
-                        merged.at[merged.index[i], 'Exit_Signal'] = 1
-                        merged.at[merged.index[i], 'InTrade'] = 0
+                        exit_signals[i] = 1
+                        in_trades[i] = 0
                         flag = 0
-
-                        if entry_price and entry_price != 0:
-                            trade_return = (exit_price - entry_price) / entry_price * 100
-                            days_held = (exit_date - entry_date).days
+                        if entry_price != 0:
+                            trade_return = (close - entry_price) / entry_price * 100
+                            days_held = (pd.Timestamp(date) - pd.Timestamp(entry_date)).days
                             signals.append({
                                 'Entry_Date': entry_date,
-                                'Exit_Date': exit_date,
+                                'Exit_Date': date,
                                 'Entry_Price': entry_price,
-                                'Exit_Price': exit_price,
+                                'Exit_Price': close,
                                 'Return_Pct': trade_return,
                                 'Days_Held': days_held
                             })
 
             elif signal_type == "RSI":
-                # RSI ONLY: Enter when RSI Active turns 1, exit when it turns 0
-                if not in_position and row['Active'] == 1:
+                if not in_position and active == 1:
                     in_position = True
-                    entry_price = row['Close']
-                    entry_date = row['Date']
-                    merged.at[merged.index[i], 'Entry_Signal'] = 1
-                    merged.at[merged.index[i], 'InTrade'] = 1
-
+                    entry_price = close
+                    entry_date = date
+                    entry_signals[i] = 1
+                    in_trades[i] = 1
                 elif in_position:
-                    merged.at[merged.index[i], 'InTrade'] = 1
-
-                    # Exit when RSI Active turns 0
-                    if row['Active'] == 0:
+                    in_trades[i] = 1
+                    if active == 0:
                         in_position = False
-                        exit_price = row['Close']
-                        exit_date = row['Date']
-                        merged.at[merged.index[i], 'Exit_Signal'] = 1
-                        merged.at[merged.index[i], 'InTrade'] = 0
-
-                        if entry_price and entry_price != 0:
-                            trade_return = (exit_price - entry_price) / entry_price * 100
-                            days_held = (exit_date - entry_date).days
+                        exit_signals[i] = 1
+                        in_trades[i] = 0
+                        if entry_price != 0:
+                            trade_return = (close - entry_price) / entry_price * 100
+                            days_held = (pd.Timestamp(date) - pd.Timestamp(entry_date)).days
                             signals.append({
                                 'Entry_Date': entry_date,
-                                'Exit_Date': exit_date,
+                                'Exit_Date': date,
                                 'Entry_Price': entry_price,
-                                'Exit_Price': exit_price,
+                                'Exit_Price': close,
                                 'Return_Pct': trade_return,
                                 'Days_Held': days_held
                             })
 
             elif signal_type == "Slope":
-                # SLOPE ONLY: Enter when slope > pos_threshold, exit when slope <= pos_threshold
-                if not in_position and row['Slope'] > pos_threshold:
+                if not in_position and slope > pos_threshold:
                     in_position = True
-                    entry_price = row['Close']
-                    entry_date = row['Date']
-                    merged.at[merged.index[i], 'Entry_Signal'] = 1
-                    merged.at[merged.index[i], 'InTrade'] = 1
-
+                    entry_price = close
+                    entry_date = date
+                    entry_signals[i] = 1
+                    in_trades[i] = 1
                 elif in_position:
-                    merged.at[merged.index[i], 'InTrade'] = 1
-
-                    # Exit when slope falls below threshold
-                    if row['Slope'] <= pos_threshold:
+                    in_trades[i] = 1
+                    if slope <= pos_threshold:
                         in_position = False
-                        exit_price = row['Close']
-                        exit_date = row['Date']
-                        merged.at[merged.index[i], 'Exit_Signal'] = 1
-                        merged.at[merged.index[i], 'InTrade'] = 0
-
-                        if entry_price and entry_price != 0:
-                            trade_return = (exit_price - entry_price) / entry_price * 100
-                            days_held = (exit_date - entry_date).days
+                        exit_signals[i] = 1
+                        in_trades[i] = 0
+                        if entry_price != 0:
+                            trade_return = (close - entry_price) / entry_price * 100
+                            days_held = (pd.Timestamp(date) - pd.Timestamp(entry_date)).days
                             signals.append({
                                 'Entry_Date': entry_date,
-                                'Exit_Date': exit_date,
+                                'Exit_Date': date,
                                 'Entry_Price': entry_price,
-                                'Exit_Price': exit_price,
+                                'Exit_Price': close,
                                 'Return_Pct': trade_return,
                                 'Days_Held': days_held
                             })
 
-            # Store current flag value
-            merged.at[merged.index[i], 'Flag'] = flag
+            flags[i] = flag
+
+        # Write arrays back to dataframe
+        merged['Flag'] = flags
+        merged['Entry_Signal'] = entry_signals
+        merged['Exit_Signal'] = exit_signals
+        merged['InTrade'] = in_trades
 
         signals_df = pd.DataFrame(signals)
         if not signals_df.empty:

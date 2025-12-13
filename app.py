@@ -57,6 +57,11 @@ st.markdown("""
         background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
     }
 
+    /* Sidebar default width (still resizable) */
+    section[data-testid="stSidebar"] > div:first-child {
+        width: 339px;
+    }
+
     /* Larger sidebar text */
     [data-testid="stSidebar"] {
         font-size: 1.1rem;

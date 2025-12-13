@@ -812,6 +812,245 @@ class SlopeTradingAnalyzer:
 
         return fig
 
+    # ─────────────────────────────────────────────────────────
+    # RSI + Slope Chart (Ayoub version)
+    # ─────────────────────────────────────────────────────────
+    def parse_rsi_from_branch(self, branch_name):
+        """Extract RSI period and threshold from branch name."""
+        import re
+        base = branch_name.split("_daily_trade_log")[0]
+        m = re.search(r"(\d+)[dD]_RSI_[^_]+_(LT|GT)(\d+)", base)
+        if m:
+            period = int(m.group(1))
+            threshold = int(m.group(3))
+            return period, threshold
+        return 14, 30  # defaults
+
+    def compute_rsi(self, close_series, period):
+        """Compute RSI indicator."""
+        delta = close_series.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(period).mean()
+        avg_loss = loss.rolling(period).mean()
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+
+    def compute_rsi_slope_trades(self, df, rsi_threshold):
+        """Compute trades based on RSI trigger + slope activation (optimized)."""
+        # Pre-extract arrays for fast access
+        dates = df["Date"].values
+        closes = df["Close"].values
+        rsi_vals = df["RSI"].values
+        slope_active_arr = df["SlopeActive"].values
+
+        trades = []
+        in_position = False
+        waiting_for_slope = False
+        pending_rsi_trigger_date = None
+        entry_price = None
+        entry_date = None
+
+        for i in range(1, len(dates)):
+            rsi_trigger = rsi_vals[i] < rsi_threshold
+            slope_active = bool(slope_active_arr[i])
+            slope_just_activated = (not slope_active_arr[i-1]) and slope_active
+            slope_just_deactivated = slope_active_arr[i-1] and (not slope_active)
+
+            if rsi_trigger:
+                pending_rsi_trigger_date = dates[i]
+                if slope_active:
+                    entry_price = closes[i]
+                    entry_date = dates[i]
+                    in_position = True
+                    waiting_for_slope = False
+                    continue
+                waiting_for_slope = True
+
+            if waiting_for_slope and slope_just_activated:
+                entry_price = closes[i]
+                entry_date = dates[i]
+                in_position = True
+                waiting_for_slope = False
+                continue
+
+            if in_position and slope_just_deactivated:
+                exit_price = closes[i]
+                exit_date = dates[i]
+                trades.append({
+                    "RSI_Trigger_Date": pending_rsi_trigger_date,
+                    "Entry_Date": entry_date,
+                    "Exit_Date": exit_date,
+                    "Entry_Price": entry_price,
+                    "Exit_Price": exit_price,
+                    "Return_Pct": (exit_price - entry_price) / entry_price * 100,
+                    "Days_Held": (pd.Timestamp(exit_date) - pd.Timestamp(entry_date)).days,
+                })
+                in_position = False
+                pending_rsi_trigger_date = None
+
+        return pd.DataFrame(trades)
+
+    def create_rsi_slope_chart(self, df, branch_name, rsi_threshold, trade_df=None):
+        """RSI Trigger + Slope Activation Chart (Ayoub style).
+
+        Args:
+            df: Pre-computed dataframe with Date, Close, Open, High, Low, RSI, SlopeActive columns
+            branch_name: Branch name for title
+            rsi_threshold: RSI threshold for oversold markers
+            trade_df: Optional trade dataframe
+        """
+
+        slope_green = "#10b981"
+        slope_gray = "#9e9e9e"
+        bull = "#26a69a"
+        bear = "#ef5350"
+
+        oversold = df[df["RSI"] < rsi_threshold]
+
+        fig = go.Figure()
+
+        # Candlesticks
+        fig.add_trace(go.Candlestick(
+            x=df["Date"], open=df["Open"], high=df["High"],
+            low=df["Low"], close=df["Close"],
+            increasing_line_color=bull, decreasing_line_color=bear,
+            increasing_fillcolor=bull, decreasing_fillcolor=bear,
+            name="Price",
+        ))
+
+        # Slope line overlay (vectorized for performance)
+        dates = df["Date"].values
+        closes = df["Close"].values
+        slope_active = df["SlopeActive"].values
+
+        # Build interleaved arrays with None separators using numpy
+        n = len(df) - 1
+        if n > 0:
+            green_mask = slope_active[:-1]
+            gray_mask = ~green_mask
+
+            # Green segments
+            green_idx = np.where(green_mask)[0]
+            green_x = np.empty(len(green_idx) * 3, dtype=object)
+            green_y = np.empty(len(green_idx) * 3, dtype=object)
+            green_x[0::3] = dates[green_idx]
+            green_x[1::3] = dates[green_idx + 1]
+            green_x[2::3] = None
+            green_y[0::3] = closes[green_idx]
+            green_y[1::3] = closes[green_idx + 1]
+            green_y[2::3] = None
+
+            # Gray segments
+            gray_idx = np.where(gray_mask)[0]
+            gray_x = np.empty(len(gray_idx) * 3, dtype=object)
+            gray_y = np.empty(len(gray_idx) * 3, dtype=object)
+            gray_x[0::3] = dates[gray_idx]
+            gray_x[1::3] = dates[gray_idx + 1]
+            gray_x[2::3] = None
+            gray_y[0::3] = closes[gray_idx]
+            gray_y[1::3] = closes[gray_idx + 1]
+            gray_y[2::3] = None
+        else:
+            green_x, green_y = [], []
+            gray_x, gray_y = [], []
+
+        if len(green_x) > 0:
+            fig.add_trace(go.Scattergl(
+                x=green_x, y=green_y, mode="lines",
+                line=dict(color=slope_green, width=3.5),
+                hoverinfo="skip", showlegend=False,
+            ))
+        if len(gray_x) > 0:
+            fig.add_trace(go.Scattergl(
+                x=gray_x, y=gray_y, mode="lines",
+                line=dict(color=slope_gray, width=3.5),
+                hoverinfo="skip", showlegend=False,
+            ))
+
+        # RSI Trigger Points
+        fig.add_trace(go.Scattergl(
+            x=oversold["Date"], y=oversold["Close"],
+            mode="markers",
+            marker=dict(color="#1e88e5", size=12, symbol="triangle-up",
+                        line=dict(color="white", width=1)),
+            name=f"RSI < {rsi_threshold}",
+        ))
+
+        shapes = []
+        if trade_df is not None and len(trade_df) > 0:
+            # Entry markers
+            fig.add_trace(go.Scattergl(
+                x=trade_df["Entry_Date"], y=trade_df["Entry_Price"],
+                mode="markers",
+                marker=dict(color="#10b981", size=18, symbol="triangle-up",
+                            line=dict(color="white", width=1)),
+                name="Entry",
+            ))
+            # Exit markers
+            fig.add_trace(go.Scattergl(
+                x=trade_df["Exit_Date"], y=trade_df["Exit_Price"],
+                mode="markers",
+                marker=dict(color="#ef4444", size=18, symbol="triangle-down",
+                            line=dict(color="white", width=1)),
+                name="Exit",
+            ))
+
+            for _, row in trade_df.iterrows():
+                entry = row["Entry_Date"]
+                exit_ = row["Exit_Date"]
+                # Background shading
+                shapes.append(dict(
+                    type="rect", xref="x", yref="paper",
+                    x0=entry, x1=exit_, y0=0, y1=1,
+                    fillcolor="rgba(16,185,129,0.08)", line=dict(width=0), layer="below",
+                ))
+                # Entry vertical line
+                shapes.append(dict(
+                    type="line", x0=entry, x1=entry, y0=0, y1=1,
+                    xref="x", yref="paper",
+                    line=dict(color="rgba(16,185,129,0.35)", width=1.3, dash="dot"),
+                ))
+                # Exit vertical line
+                shapes.append(dict(
+                    type="line", x0=exit_, x1=exit_, y0=0, y1=1,
+                    xref="x", yref="paper",
+                    line=dict(color="rgba(239,68,68,0.35)", width=1.3, dash="dot"),
+                ))
+                # Annotations
+                fig.add_annotation(x=entry, y=row["Entry_Price"], text="ENTRY",
+                    showarrow=False, yshift=-24,
+                    font=dict(size=14, color="#000000", family="Arial Black"))
+                fig.add_annotation(x=exit_, y=row["Exit_Price"], text=f"{row['Return_Pct']:+.1f}%",
+                    showarrow=False, yshift=26,
+                    font=dict(size=14, color="#000000", family="Arial Black"))
+
+        fig.update_layout(shapes=shapes)
+
+        max_date = df["Date"].max()
+        min_date = df["Date"].min()
+        default_start = max_date - pd.DateOffset(years=1)
+        default_start = max(default_start, min_date)
+
+        fig.update_layout(
+            title=dict(text=f"<b>{branch_name}</b> — RSI + Slope Trades", x=0.5, font=dict(size=18)),
+            height=700,
+            margin=dict(l=50, r=40, t=60, b=40),
+            hovermode="x unified",
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            xaxis=dict(type="date", range=[default_start, max_date], rangeslider=dict(visible=False)),
+            yaxis=dict(title="Price", showgrid=True, gridcolor="rgba(200,200,200,0.25)"),
+        )
+
+        fig.update_xaxes(showspikes=True, spikethickness=1, spikecolor="#888", spikedash="solid",
+            spikesnap="cursor", showline=True, linecolor="#ccc")
+        fig.update_yaxes(showspikes=True, spikethickness=1, spikecolor="#888", spikedash="solid",
+            spikesnap="cursor", showline=True, linecolor="#ccc")
+
+        return fig
+
     def compute_branch_cagr(self, total_return_pct, years):
         """Compute CAGR from total return percentage and years."""
         if years <= 0 or total_return_pct is None:
@@ -1105,7 +1344,33 @@ def main():
                             slope_window, pos_threshold, neg_threshold
                         )
                         st.plotly_chart(chart, use_container_width=True)
-                    
+
+                        # Ayoub RSI + Slope Chart
+                        st.subheader("RSI + Slope Trigger Chart (Ayoub Style)")
+
+                        # Build dataframe for RSI slope trades (limit to 2 years for performance)
+                        rsi_df = ticker_data.copy()
+                        rsi_df = rsi_df.merge(branch_data[["Date", "Active"]], on="Date", how="left")
+                        rsi_df["Active"] = rsi_df["Active"].fillna(0)
+                        rsi_df = rsi_df.sort_values("Date").reset_index(drop=True)
+
+                        # Limit to last 2 years for faster processing
+                        cutoff = rsi_df["Date"].max() - pd.DateOffset(years=2)
+                        rsi_df = rsi_df[rsi_df["Date"] >= cutoff].copy().reset_index(drop=True)
+
+                        rsi_period, rsi_threshold = analyzer.parse_rsi_from_branch(branch_to_analyze)
+                        rsi_df["RSI"] = analyzer.compute_rsi(rsi_df["Close"], rsi_period)
+                        rsi_df["Slope"] = analyzer.calculate_slope(rsi_df["Close"], slope_window)
+                        rsi_df["SlopeActive"] = rsi_df["Slope"] > pos_threshold
+
+                        rsi_trade_df = analyzer.compute_rsi_slope_trades(rsi_df, rsi_threshold)
+
+                        ayoub_chart = analyzer.create_rsi_slope_chart(
+                            rsi_df, branch_to_analyze, rsi_threshold,
+                            trade_df=rsi_trade_df
+                        )
+                        st.plotly_chart(ayoub_chart, use_container_width=True)
+
                     # Trade details
                     if not signals_df.empty:
                         st.subheader("Trade Details")

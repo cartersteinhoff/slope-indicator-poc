@@ -184,6 +184,34 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ============================================
+# Cached data loading functions
+# ============================================
+
+@st.cache_data
+def _load_branch_data_cached(branch_name, trade_logs_path="./trade_logs"):
+    """Cached: Load trading data for a specific branch"""
+    file_path = os.path.join(trade_logs_path, f"{branch_name}.parquet")
+    df = pd.read_parquet(file_path)
+    df['Date'] = pd.to_datetime(df['Date'])
+    return df
+
+@st.cache_data
+def _load_ticker_data_cached(ticker, tickers_path="./tickers"):
+    """Cached: Load price data for a specific ticker"""
+    file_path = os.path.join(tickers_path, f"{ticker}.parquet")
+    df = pd.read_parquet(file_path)
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values('Date')
+    return df
+
+@st.cache_data
+def _load_available_branches_cached(trade_logs_path="./trade_logs"):
+    """Cached: Load all available trading branches"""
+    parquet_files = glob.glob(os.path.join(trade_logs_path, "*.parquet"))
+    branches = [os.path.splitext(os.path.basename(f))[0] for f in parquet_files]
+    return sorted(branches)
+
 class SlopeTradingAnalyzer:
     def __init__(self):
         self.trade_logs_path = "./trade_logs"
@@ -192,32 +220,23 @@ class SlopeTradingAnalyzer:
     def load_available_branches(self):
         """Load all available trading branches from the trade_logs directory"""
         try:
-            csv_files = glob.glob(os.path.join(self.trade_logs_path, "*.csv"))
-            branches = [os.path.splitext(os.path.basename(f))[0] for f in csv_files]
-            return sorted(branches)
+            return _load_available_branches_cached(self.trade_logs_path)
         except Exception as e:
             st.error(f"Error loading branches: {e}")
             return []
-    
+
     def load_branch_data(self, branch_name):
         """Load trading data for a specific branch"""
         try:
-            file_path = os.path.join(self.trade_logs_path, f"{branch_name}.csv")
-            df = pd.read_csv(file_path)
-            df['Date'] = pd.to_datetime(df['Date'])
-            return df
+            return _load_branch_data_cached(branch_name, self.trade_logs_path)
         except Exception as e:
             st.error(f"Error loading branch {branch_name}: {e}")
             return None
-    
+
     def load_ticker_data(self, ticker):
         """Load price data for a specific ticker"""
         try:
-            file_path = os.path.join(self.tickers_path, f"{ticker}.csv")
-            df = pd.read_csv(file_path)
-            df['Date'] = pd.to_datetime(df['Date'])
-            df = df.sort_values('Date')
-            return df
+            return _load_ticker_data_cached(ticker, self.tickers_path)
         except Exception as e:
             st.error(f"Error loading ticker {ticker}: {e}")
             return None
@@ -787,55 +806,11 @@ class SlopeTradingAnalyzer:
         return cagr
 
     def compute_all_branch_overviews(self, branches, slope_window, pos_threshold, neg_threshold, signal_type):
-        """Compute overview metrics for all branches."""
-        overview_data = []
-        for branch in branches:
-            branch_data = self.load_branch_data(branch)
-            if branch_data is None:
-                continue
-
-            ticker = self.extract_ticker_from_branch(branch)
-            if not ticker:
-                continue
-
-            ticker_data = self.load_ticker_data(ticker)
-            if ticker_data is None:
-                continue
-
-            merged_data, signals_df = self.apply_slope_filter(
-                branch_data, ticker_data, slope_window, pos_threshold, neg_threshold, signal_type
-            )
-
-            if signals_df.empty:
-                continue
-
-            metrics = self.calculate_performance_metrics(signals_df)
-            total_return = metrics.get('Total_Return_Pct', 0)
-
-            first_entry = signals_df['Entry_Date'].min()
-            last_exit = signals_df['Exit_Date'].max()
-            days_span = (last_exit - first_entry).days
-            years_float = days_span / 365.25 if days_span > 0 else 0
-
-            period_str = f"{first_entry.strftime('%Y-%m-%d')} to {last_exit.strftime('%Y-%m-%d')}"
-
-            cagr = self.compute_branch_cagr(total_return, years_float)
-
-            overview_data.append({
-                'Ticker': ticker,
-                'Branch': clean_branch_name(branch),
-                'Branch_Raw': branch,
-                'Period': period_str,
-                'Return %': round(total_return, 2),
-                'Max DD %': round(metrics.get('Max_Drawdown_Pct', 0), 2),
-                'CAGR %': round(cagr, 2),
-                'Years': round(years_float, 1),
-                'TIM %': round(metrics.get('Time_In_Market_Pct', 0), 2),
-                'Win Rate %': round(metrics.get('Win_Rate_Pct', 0), 2),
-                'Trades': metrics.get('Num_Trades', 0)
-            })
-
-        return pd.DataFrame(overview_data)
+        """Compute overview metrics for all branches (cached)."""
+        # Convert to tuple for hashability, call cached function
+        return _compute_all_branch_overviews_cached(
+            tuple(branches), slope_window, pos_threshold, neg_threshold, signal_type
+        )
 
 
 # Initialize the analyzer
@@ -853,6 +828,62 @@ def clean_branch_name(branch_raw: str) -> str:
     pretty = branch_raw.replace("_", " ")
 
     return pretty
+
+
+@st.cache_data
+def _compute_all_branch_overviews_cached(branches_tuple, slope_window, pos_threshold, neg_threshold, signal_type):
+    """Cached: Compute overview metrics for all branches."""
+    analyzer = SlopeTradingAnalyzer()
+    branches = list(branches_tuple)
+
+    overview_data = []
+    for branch in branches:
+        branch_data = analyzer.load_branch_data(branch)
+        if branch_data is None:
+            continue
+
+        ticker = analyzer.extract_ticker_from_branch(branch)
+        if not ticker:
+            continue
+
+        ticker_data = analyzer.load_ticker_data(ticker)
+        if ticker_data is None:
+            continue
+
+        merged_data, signals_df = analyzer.apply_slope_filter(
+            branch_data, ticker_data, slope_window, pos_threshold, neg_threshold, signal_type
+        )
+
+        if signals_df.empty:
+            continue
+
+        metrics = analyzer.calculate_performance_metrics(signals_df)
+        total_return = metrics.get('Total_Return_Pct', 0)
+
+        first_entry = signals_df['Entry_Date'].min()
+        last_exit = signals_df['Exit_Date'].max()
+        days_span = (last_exit - first_entry).days
+        years_float = days_span / 365.25 if days_span > 0 else 0
+
+        period_str = f"{first_entry.strftime('%Y-%m-%d')} to {last_exit.strftime('%Y-%m-%d')}"
+
+        cagr = analyzer.compute_branch_cagr(total_return, years_float)
+
+        overview_data.append({
+            'Ticker': ticker,
+            'Branch': clean_branch_name(branch),
+            'Branch_Raw': branch,
+            'Period': period_str,
+            'Return %': round(total_return, 2),
+            'Max DD %': round(metrics.get('Max_Drawdown_Pct', 0), 2),
+            'CAGR %': round(cagr, 2),
+            'Years': round(years_float, 1),
+            'TIM %': round(metrics.get('Time_In_Market_Pct', 0), 2),
+            'Win Rate %': round(metrics.get('Win_Rate_Pct', 0), 2),
+            'Trades': metrics.get('Num_Trades', 0)
+        })
+
+    return pd.DataFrame(overview_data)
 
 
 def display_metrics_row(metrics, yearly_dict):
